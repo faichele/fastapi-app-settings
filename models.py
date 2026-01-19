@@ -4,7 +4,9 @@ from typing import Optional
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import Boolean, Column, DateTime, Integer, String
 
-from shared_orm import Base
+# Shared SQLAlchemy Base class
+from fastapi_shared_orm import Base
+
 
 # SQLAlchemy model for settings
 class Setting(Base):
