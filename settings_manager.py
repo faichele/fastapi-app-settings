@@ -1,8 +1,11 @@
+# packages/fastapi_app_settings/settings_manager.py
 import logging
 import importlib.util
 import traceback
-from typing import Any, Dict, Iterable
+from typing import Any, Dict, Iterable, Optional
 from pathlib import Path
+import os
+
 from sqlalchemy.orm import Session
 
 try:
@@ -17,59 +20,174 @@ logger = logging.getLogger(__name__)
 
 
 class SettingsManager:
-    """
-    Manager-Klasse zur Synchronisierung von ApplicationSettings und Datenbank-Settings.
-    Dient als zentrale Schnittstelle zum Lesen und Schreiben von Einstellungen.
+    """\
+    Manager class for synchronizing ApplicationSettings and database-backed settings.
+    Acts as the central interface for reading and writing settings.
 
-    Hinweise zur Wiederverwendbarkeit:
-    - app_settings_obj kann optional injiziert werden (z. B. Pydantic Settings-Instanz).
-    - Ohne app_settings_obj werden nur DB-Settings verwaltet (PROTECTED werden ignoriert).
+    Reusability notes:
+    - app_settings_obj can be injected (e.g., a Pydantic settings instance).
+    - Without app_settings_obj only DB settings are managed (PROTECTED settings are ignored).
     """
 
-    def __init__(self, db: Session | None = None, app_settings_obj: Any | None = None):
+    def __init__(self, db: Optional[Session] = None, app_settings_obj: Optional[Any] = None):
         self.db = db
         self._app_settings = app_settings_obj if app_settings_obj is not None else default_app_settings
         self._cached_db_settings: Dict[str, Any] = {}
         self._initialized = False
-        # Kombinierte Settingslisten (Sets für einfache Vereinigung und Case-insensitive Vergleiche)
+        # Combined setting lists (sets for easy union and case-insensitive comparisons)
         self._allowed_settings = {s.lower() for s in BASE_ALLOWED}
         self._protected_settings = {s.lower() for s in BASE_PROTECTED}
-        # App-spezifische Defaultwerte (lowercased Keys). Werte können Konstanten oder Callables sein.
+        # App-specific default values (lowercased keys). Values may be constants or callables.
         self._default_settings_values: Dict[str, Any] = {}
+        # .env defaults (lowercased keys, string values)
+        self._dotenv_values: Dict[str, str] = {}
 
-    def set_app_settings(self, app_settings_obj: Any | None) -> None:
-        """
-        Enables setting/replacing the ApplicationSettings instance.
-        """
+    def set_app_settings(self, app_settings_obj: Optional[Any]) -> None:
+        """Set/replace the ApplicationSettings instance."""
         self._app_settings = app_settings_obj
 
-    def initialize(self, db: Session) -> None:
-        """
-        Initializes the SettingsManager with a db session and syncs settings
-        between ApplicationSettings and database
+    def initialize(
+        self,
+        db: Session,
+        dotenv_path: Optional[object] = None,
+        dotenv_override: bool = False,
+    ) -> None:
+        """\
+        Initializes the SettingsManager with a DB session and syncs settings
+        between ApplicationSettings and database.
+
+        Optional: loads settings from a `.env` file and uses them as defaults.
         """
         self.db = db
         if not self._initialized:
             self._initialized = True
+
+            # Load .env first so ENV defaults are available during later reads
+            self.load_dotenv(dotenv_path=dotenv_path, override=dotenv_override)
+
+            # Optionally apply ENV values to the injected app settings (non-protected only)
+            self._sync_env_to_app_settings()
+
             self._sync_settings_to_db()
             self._load_settings_from_db()
             self._santinize_setting_attributes()
 
+    def load_dotenv(self, dotenv_path: Optional[object] = None, override: bool = False) -> None:
+        """\
+        Loads variables from a `.env` file and stores them as internal defaults.
+
+        Requirements:
+        - optional dependency `python-dotenv`. If not installed, this is silently skipped.
+
+        Behavior:
+        - Only keys contained in `ALLOWED_SETTINGS` are imported.
+        - Keys are stored lowercased.
+        - Values remain strings; type conversion is done when syncing into ApplicationSettings.
+        """
+        try:
+            from dotenv import dotenv_values, load_dotenv  # type: ignore
+        except Exception:  # pragma: no cover
+            logger.info("python-dotenv not installed; skipping .env loading")
+            return
+
+        path: Optional[Path]
+        if dotenv_path is None:
+            candidate = Path.cwd() / ".env"
+            path = candidate if candidate.exists() else None
+        else:
+            p = Path(str(dotenv_path))
+            path = p if p.is_absolute() else (Path.cwd() / p)
+            path = path.resolve()
+            if not path.exists():
+                logger.warning(f".env file not found: {path}")
+                return
+
+        if path is None:
+            return
+
+        # Load into os.environ (depending on override)
+        load_dotenv(dotenv_path=str(path), override=override)
+
+        # Read raw key-values from file
+        raw = dotenv_values(str(path))
+        loaded_count = 0
+        for k, v in raw.items():
+            if not k or v is None:
+                continue
+            key_l = k.lower()
+            if key_l not in self._allowed_settings:
+                continue
+            if (not override) and (key_l in self._dotenv_values):
+                continue
+            self._dotenv_values[key_l] = str(v)
+            loaded_count += 1
+
+        # Make .env values available as defaults in get_setting()
+        for k, v in self._dotenv_values.items():
+            self._default_settings_values.setdefault(k, v)
+
+        logger.info(f"Loaded .env settings from {path}. Count: {loaded_count}")
+
+    def _sync_env_to_app_settings(self) -> None:
+        """\
+        Syncs `.env`/`os.environ` values into ApplicationSettings (only `ALLOWED_SETTINGS`,
+        excluding `PROTECTED_SETTINGS`).
+
+        Note: This is optional; if no app settings object exists, nothing happens.
+        """
+        if self._app_settings is None:
+            return
+
+        for name in self._allowed_settings:
+            if name in self._protected_settings:
+                continue
+
+            env_key = name.upper()
+            if env_key not in os.environ:
+                continue
+
+            if not hasattr(self._app_settings, env_key):
+                continue
+
+            raw_val = os.environ.get(env_key)
+            if raw_val is None:
+                continue
+
+            try:
+                current_value = getattr(self._app_settings, env_key)
+                if callable(current_value):
+                    continue
+
+                if isinstance(current_value, bool):
+                    new_value = str(raw_val).lower() in ("true", "1", "yes", "y")
+                elif isinstance(current_value, int):
+                    new_value = int(raw_val)
+                elif isinstance(current_value, float):
+                    new_value = float(raw_val)
+                else:
+                    new_value = str(raw_val)
+
+                setattr(self._app_settings, env_key, new_value)
+            except Exception as e:  # pragma: no cover - defensive
+                logger.warning(f"Error while syncing ENV to ApplicationSettings for {env_key}: {e}")
+
     def load_app_specific_settings(
         self,
         file_rel_path: str,
-        app_root: str | Path | None = None,
+        app_root: Optional[object] = None,
         allowed_var_name: str = "ALLOWED_SETTINGS",
         protected_var_name: str = "PROTECTED_SETTINGS",
         default_values_var_name: str = "DEFAULT_SETTINGS_VALUES",
     ) -> None:
-        """
-        Lädt zusätzliche ALLOWED/PROTECTED-Listen aus einer Python-Datei relativ zum App-Root
-        und vereinigt sie mit den Basislisten.
-        Die Datei sollte Variablen mit Listen beinhalten (z. B. ALLOWED_SETTINGS, PROTECTED_SETTINGS).
+        """\
+        Loads additional ALLOWED/PROTECTED lists from a Python file relative to the app root
+        and merges them with the base lists.
+
+        The file should expose variables with lists (e.g. ALLOWED_SETTINGS, PROTECTED_SETTINGS)
+        and can optionally provide DEFAULT_SETTINGS_VALUES.
         """
         try:
-            base = Path(app_root) if app_root else Path.cwd()
+            base = Path(str(app_root)) if app_root else Path.cwd()
             target = (base / file_rel_path).resolve()
             if not target.exists():
                 logger.warning(f"Extra settings file not found: {target}")
@@ -82,19 +200,19 @@ class SettingsManager:
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
 
-            # Aus Modul die Variablen lesen
-            extra_allowed: Iterable[str] | None = getattr(module, allowed_var_name, None)
-            extra_protected: Iterable[str] | None = getattr(module, protected_var_name, None)
-            extra_defaults: Dict[str, Any] | None = getattr(module, default_values_var_name, None)
+            # Retrieve variables from the module
+            extra_allowed = getattr(module, allowed_var_name, None)
+            extra_protected = getattr(module, protected_var_name, None)
+            extra_defaults = getattr(module, default_values_var_name, None)
 
             if extra_allowed:
-                self._allowed_settings.update({s.lower() for s in extra_allowed})
+                self._allowed_settings.update({str(s).lower() for s in extra_allowed})
             if extra_protected:
-                self._protected_settings.update({s.lower() for s in extra_protected})
+                self._protected_settings.update({str(s).lower() for s in extra_protected})
             if isinstance(extra_defaults, dict):
-                # Merge defaults (lowercase keys); Werte können Konstanten oder Callables sein.
+                # Merge defaults (lowercase keys); values can be constants or callables.
                 for k, v in extra_defaults.items():
-                    self._default_settings_values[k.lower()] = v
+                    self._default_settings_values[str(k).lower()] = v
 
             logger.info(
                 f"Loaded app-specific settings from {target}. Allowed: {len(self._allowed_settings)}, Protected: {len(self._protected_settings)}, Defaults: {len(self._default_settings_values)}"
@@ -110,19 +228,19 @@ class SettingsManager:
         return sorted(self._protected_settings)
 
     def get_default_settings_values(self) -> Dict[str, Any]:
-        """Gibt eine Kopie der Default-Werte zurück.
+        """Return a copy of default values.
 
-        Hinweis: Enthaltene Werte können Konstanten oder Callables sein. Callables werden
-        hier **nicht** ausgewertet, sondern erst bei Bedarf über `get_default_value`.
+        Note: Values may be constants or callables. Callables are **not** evaluated here,
+        but on demand via `get_default_value`.
         """
         return dict(self._default_settings_values)
 
-    def get_default_value(self, name: str) -> Any | None:
-        """Gibt den Default-Wert für ein Setting zurück.
+    def get_default_value(self, name: str) -> Optional[Any]:
+        """Return the default value for a setting.
 
-        Unterstützt sowohl konstante Werte als auch Callables in DEFAULT_SETTINGS_VALUES.
-        Bei Callables wird die Funktion beim Zugriff ausgeführt. Tritt dabei ein Fehler auf,
-        wird dieser geloggt und `None` zurückgegeben.
+        Supports both constants and callables in DEFAULT_SETTINGS_VALUES.
+        If a callable is used, it is executed on access. If execution fails,
+        the error is logged and `None` is returned.
         """
         key = name.lower()
         if key not in self._default_settings_values:
@@ -138,38 +256,38 @@ class SettingsManager:
         return value
 
     def _sync_settings_to_db(self) -> None:
-        """
-        Synchronisiert ApplicationSettings mit der Datenbank.
-        Sicherheitsrelevante Settings werden NICHT in die DB geschrieben.
+        """\
+        Synchronizes ApplicationSettings into the database.
+        Security-relevant settings are NOT written to the DB.
         """
         if not self.db:
             logger.warning("No database connection available for SettingsManager")
             return
 
         if self._app_settings is None:
-            # Keine App-Settings vorhanden: keine Synchronisation aus ENV
+            # No app settings available: no env->db sync
             return
 
-        # Nur ALLOWED_SETTINGS in die DB schreiben
+        # Write only ALLOWED_SETTINGS into the database
         for setting_name in self._allowed_settings:
             setting_name_lower = setting_name.lower()
 
-            # Existiert das Setting in den ApplicationSettings?
+            # Does the setting exist on the ApplicationSettings object?
             if hasattr(self._app_settings, setting_name_lower.upper()):
                 app_setting_value = getattr(self._app_settings, setting_name_lower.upper())
 
-                # Berechnete Settings überspringen
+                # Skip computed settings
                 if callable(app_setting_value):
                     continue
 
-                # Komplexe Typen in String konvertieren
+                # Convert complex types to string
                 if not isinstance(app_setting_value, (str, int, float, bool)):
                     if hasattr(app_setting_value, "__str__"):
                         app_setting_value = str(app_setting_value)
                     else:
                         continue
 
-                # In DB speichern, falls noch nicht vorhanden
+                # Store in DB if not present yet
                 db_setting = self.db.query(Setting).filter_by(name=setting_name).first()
 
                 if not db_setting:
@@ -184,41 +302,41 @@ class SettingsManager:
                     self.db.commit()
 
     def _load_settings_from_db(self) -> None:
-        """
-        Lädt alle Settings aus der DB und aktualisiert ApplicationSettings
-        sowie den internen Cache.
+        """\
+        Loads all settings from the DB and updates ApplicationSettings
+        as well as the internal cache.
         """
         if not self.db:
             logger.warning("No database connection available for SettingsManager")
             return
 
-        db_settings = self.db.query(Setting).all()
+        db_rows = self.db.query(Setting).all()
 
-        # Cache aktualisieren
-        self._cached_db_settings = {setting.name: setting.value for setting in db_settings}
+        # Update cache
+        self._cached_db_settings = {row.name: row.value for row in db_rows}
 
         if self._app_settings is None:
-            # Ohne App-Settings keine Rückspielung in ENV
+            # Without app settings object, there is nothing to write back
             return
 
-        # ApplicationSettings mit DB-Werten aktualisieren (ohne PROTECTED_SETTINGS)
-        for setting in db_settings:
-            if setting.name.lower() in self._protected_settings:
+        # Update ApplicationSettings from DB values (excluding PROTECTED_SETTINGS)
+        for row in db_rows:
+            if row.name.lower() in self._protected_settings:
                 continue
 
-            setting_name_upper = setting.name.upper()
+            setting_name_upper = row.name.upper()
             if hasattr(self._app_settings, setting_name_upper):
                 try:
                     current_value = getattr(self._app_settings, setting_name_upper)
 
                     if isinstance(current_value, bool):
-                        new_value = setting.value.lower() in ("true", "1", "yes", "y")
+                        new_value = row.value.lower() in ("true", "1", "yes", "y")
                     elif isinstance(current_value, int):
-                        new_value = int(setting.value)
+                        new_value = int(row.value)
                     elif isinstance(current_value, float):
-                        new_value = float(setting.value)
+                        new_value = float(row.value)
                     else:
-                        new_value = setting.value
+                        new_value = row.value
 
                     setattr(self._app_settings, setting_name_upper, new_value)
                     logger.debug(f"ApplicationSettings updated: {setting_name_upper}={new_value}")
@@ -226,49 +344,48 @@ class SettingsManager:
                     logger.warning(f"Error while updating setting {setting_name_upper}: {str(e)}")
 
     def _santinize_setting_attributes(self):
-        """
-        Set is_dynamic and is_protected attributes for settings in database.
-        * PROTECTED_SETTINGS are marked as is_dynamic=False, is_protected=True
-        * ALLOWED_SETTINGS are marked as is_dynamic=True, is_protected=False
-        :return:
+        """\
+        Ensures `is_dynamic` and `is_protected` attributes are set correctly for settings in the DB.
+
+        - PROTECTED_SETTINGS are marked as is_dynamic=False, is_protected=True
+        - ALLOWED_SETTINGS are marked as is_dynamic=True, is_protected=False
         """
         # Retrieve existing settings from database
         existing_settings = self.db.query(Setting).all()
 
-        # First check and mark PROTECTED_SETTINGS accordingly
+        # First, check and mark PROTECTED_SETTINGS accordingly
         for setting in existing_settings:
             if setting.name not in self._protected_settings:
                 continue
 
-            # If one of is_protected or is_dynamic is not set (yet), apply default values
+            # If either flag isn't set (yet), apply defaults
             if setting.is_protected is None or setting.is_dynamic is None:
                 setting.is_protected = True
                 setting.is_dynamic = False
 
-            # Commit changes to database record
+            # Persist changes
             self.db.add(setting)
 
-        # Then check and mank ALLOWED_SETTINGS accordingly
+        # Then check and mark ALLOWED_SETTINGS accordingly
         for setting in existing_settings:
             if setting.name not in self._allowed_settings:
                 continue
 
-            # If one of is_protected or is_dynamic is not set (yet), apply default values
+            # If either flag isn't set (yet), apply defaults
             if setting.is_protected is None or setting.is_dynamic is None:
                 setting.is_protected = False
                 setting.is_dynamic = True
 
-            # Commit changes to database record
+            # Persist changes
             self.db.add(setting)
 
         # Commit all changes to database
         self.db.commit()
 
-
-    def get_setting(self, name: str, default: Any | None = None) -> Any:
-        """
-        Liefert den Wert eines Settings.
-        PROTECTED_SETTINGS werden immer aus den ApplicationSettings gelesen.
+    def get_setting(self, name: str, default: Optional[Any] = None) -> Any:
+        """\
+        Returns the value of a setting.
+        PROTECTED_SETTINGS are always read from ApplicationSettings.
         """
         if name.lower() in self._protected_settings:
             if self._app_settings is None:
@@ -294,7 +411,7 @@ class SettingsManager:
                 self._cached_db_settings[name] = db_setting.value
                 return db_setting.value
 
-        # Fallback to provided default values (constant or callables)
+        # Fall back to manager-provided defaults (constants or callables)
         default_from_manager = self.get_default_value(name)
         if default_from_manager is not None:
             return default_from_manager
@@ -302,14 +419,15 @@ class SettingsManager:
         return default
 
     def set_setting(self, name: str, value: Any) -> bool:
-        """
+        """\
         Sets a setting value in ApplicationSettings and the database.
-        PROTECTED_SETTINGS can not be set.
+        PROTECTED_SETTINGS cannot be set.
+
         Parameters:
-            name (str): Name of the setting.
-            value (Any): Value to set.
+            name: Setting name.
+            value: Value to set.
         Returns:
-            bool - True on success, False on failure
+            True on success, False on failure.
         """
         if not self.db:
             logger.warning("No database connection available for SettingsManager")
@@ -359,16 +477,14 @@ class SettingsManager:
             return False
 
     def get_all_settings(self) -> Dict[str, Any]:
-        """
-        Liefert alle Settings als Dictionary (DB + ApplicationSettings, nur ALLOWED_SETTINGS).
-        """
+        """Returns all settings as a dictionary (DB + ApplicationSettings, only ALLOWED_SETTINGS)."""
         result: Dict[str, Any] = {}
-        # Zuerst alle DB-Settings
+        # First, all DB settings
         for name, value in self._cached_db_settings.items():
             result[name] = value
 
         if self._app_settings is not None:
-            # Dann ALLOWED aus ApplicationSettings
+            # Then ALLOWED settings from ApplicationSettings
             for attr in dir(self._app_settings):
                 if not attr.startswith('_') and not callable(getattr(self._app_settings, attr)):
                     if attr.lower() in self._allowed_settings:
@@ -378,3 +494,4 @@ class SettingsManager:
 
 # Singleton instance
 settings_manager = SettingsManager()
+
