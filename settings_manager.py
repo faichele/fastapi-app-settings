@@ -1,4 +1,3 @@
-# packages/fastapi_app_settings/settings_manager.py
 import logging
 import importlib.util
 import traceback
