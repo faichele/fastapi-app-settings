@@ -1,4 +1,4 @@
-# rideto-app-settings
+nte# rideto-app-settings
 
 Wiederverwendbares Modul für anwendungsweite Einstellungen mit FastAPI, SQLAlchemy und Pydantic.
 
@@ -64,6 +64,59 @@ settings_manager.set_setting("thumbnail_directory", "static/thumb")
 - Als installiertes Modul: `from app_settings import ...`
 - Innerhalb des bestehenden Projekts können weiterhin die bisherigen Pfade genutzt werden:
   - `from backend.app_settings import ...`
+
+## Template-Unterstützung (NEU)
+
+Das Modul bietet jetzt Jinja2-Template-Unterstützung für eine Web-UI zur Einstellungsverwaltung:
+
+```python
+from app_settings import create_settings_router
+
+# Mit Templates
+router = create_settings_router(
+    prefix="/api/settings",
+    enable_templates=True,
+    custom_template_name="settings_example.html"  # Optional
+)
+
+app.include_router(router)
+
+# Die UI ist dann verfügbar unter:
+# http://localhost:8000/api/settings/ui
+```
+
+### Features
+
+- **Basis-Template**: `settings_base.html` - Erweiterbarer Rahmen für eigene Formulare
+- **Beispiel-Template**: `settings_example.html` - Vollständiges Beispiel
+- **Bootstrap 5**: Eingebautes responsives Styling
+- **Formular-Handling**: POST-Endpoint für Einstellungs-Updates
+- **Nachrichten**: Erfolgs-/Fehlermeldungen nach Updates
+
+### Eigenes Template erstellen
+
+Erstellen Sie ein Template, das `settings_base.html` erweitert:
+
+```html
+{% extends "settings_base.html" %}
+
+{% block title %}Meine Einstellungen{% endblock %}
+
+{% block content %}
+<div class="settings-section">
+    <h3>Projekteinstellungen</h3>
+    
+    <div class="form-group">
+        <label for="project_name" class="form-label">Projektname</label>
+        <input type="text" class="form-control" 
+               name="project_name" 
+               value="{{ settings.project_name | default('') }}">
+    </div>
+</div>
+{% endblock %}
+```
+
+Weitere Details siehe [TEMPLATE_USAGE.md](TEMPLATE_USAGE.md).
 
 ## Entwickeln
 

@@ -1,0 +1,107 @@
+{% extends "settings_base.html" %}
+
+{% block title %}Beispiel Einstellungen{% endblock %}
+
+{% block page_title %}Beispiel: Anwendungseinstellungen{% endblock %}
+
+{% block page_description %}
+    Dies ist ein Beispiel-Template, das zeigt, wie Sie das Basis-Template erweitern können.
+{% endblock %}
+
+{% block content %}
+<div class="settings-section">
+    <h3>Allgemeine Einstellungen</h3>
+
+    <div class="form-group">
+        <label for="project_name" class="form-label">Projektname</label>
+        <input type="text" class="form-control" id="project_name" name="project_name"
+               value="{{ settings.project_name | default('') }}" required>
+        <small class="form-text text-muted">Der Name Ihres Projekts.</small>
+    </div>
+
+    <div class="form-group">
+        <label for="environment" class="form-label">Umgebung</label>
+        <select class="form-select" id="environment" name="environment">
+            <option value="development" {% if settings.environment == 'development' %}selected{% endif %}>Development</option>
+            <option value="staging" {% if settings.environment == 'staging' %}selected{% endif %}>Staging</option>
+            <option value="production" {% if settings.environment == 'production' %}selected{% endif %}>Production</option>
+        </select>
+    </div>
+</div>
+
+<div class="settings-section">
+    <h3>Verzeichnisse</h3>
+
+    <div class="form-group">
+        <label for="image_directory" class="form-label">Bildverzeichnis</label>
+        <input type="text" class="form-control" id="image_directory" name="image_directory"
+               value="{{ settings.image_directory | default('static/images') }}">
+        <small class="form-text text-muted">Relativer Pfad zum Bildverzeichnis.</small>
+    </div>
+
+    <div class="form-group">
+        <label for="thumbnail_directory" class="form-label">Thumbnail-Verzeichnis</label>
+        <input type="text" class="form-control" id="thumbnail_directory" name="thumbnail_directory"
+               value="{{ settings.thumbnail_directory | default('static/thumbnails') }}">
+    </div>
+
+    <div class="form-group">
+        <label for="upload_directory" class="form-label">Upload-Verzeichnis</label>
+        <input type="text" class="form-control" id="upload_directory" name="upload_directory"
+               value="{{ settings.upload_directory | default('static/uploads') }}">
+    </div>
+</div>
+
+<div class="settings-section">
+    <h3>Thumbnail-Einstellungen</h3>
+
+    <div class="row">
+        <div class="col-md-6">
+            <div class="form-group">
+                <label for="thumbnail_width" class="form-label">Breite</label>
+                <input type="number" class="form-control" id="thumbnail_width" name="thumbnail_width"
+                       value="{{ settings.thumbnail_width | default(200) }}" min="50" max="1000">
+            </div>
+        </div>
+        <div class="col-md-6">
+            <div class="form-group">
+                <label for="thumbnail_height" class="form-label">Höhe</label>
+                <input type="number" class="form-control" id="thumbnail_height" name="thumbnail_height"
+                       value="{{ settings.thumbnail_height | default(200) }}" min="50" max="1000">
+            </div>
+        </div>
+    </div>
+
+    <div class="form-group">
+        <label for="thumbnail_size_type" class="form-label">Skalierungstyp</label>
+        <select class="form-select" id="thumbnail_size_type" name="thumbnail_size_type">
+            <option value="absolute" {% if settings.thumbnail_size_type == 'absolute' %}selected{% endif %}>Absolute Größe</option>
+            <option value="relative" {% if settings.thumbnail_size_type == 'relative' %}selected{% endif %}>Relative Größe</option>
+        </select>
+    </div>
+</div>
+
+<div class="settings-section protected-setting">
+    <h3>Geschützte Einstellungen</h3>
+    <p><strong>Hinweis:</strong> Diese Einstellungen sind schreibgeschützt und können nicht über dieses Formular geändert werden.</p>
+
+    <div class="form-group">
+        <label class="form-label">Datenbank-Server</label>
+        <input type="text" class="form-control" value="{{ settings.postgres_server | default('localhost') }}" disabled readonly>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    // Beispiel: Validierung
+    document.getElementById('settingsForm').addEventListener('submit', function(e) {
+        const projectName = document.getElementById('project_name').value.trim();
+        if (projectName.length < 3) {
+            e.preventDefault();
+            alert('Der Projektname muss mindestens 3 Zeichen lang sein.');
+            return false;
+        }
+    });
+</script>
+{% endblock %}
