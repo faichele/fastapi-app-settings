@@ -1,4 +1,3 @@
-# packages/fastapi_app_settings/settings_manager.py
 import logging
 import importlib.util
 import traceback
@@ -47,10 +46,10 @@ class SettingsManager:
         self._app_settings = app_settings_obj
 
     def initialize(
-        self,
-        db: Session,
-        dotenv_path: Optional[object] = None,
-        dotenv_override: bool = False,
+            self,
+            db: Session,
+            dotenv_path: Optional[object] = None,
+            dotenv_override: bool = False,
     ) -> None:
         """\
         Initializes the SettingsManager with a DB session and syncs settings
@@ -90,6 +89,17 @@ class SettingsManager:
             logger.info("python-dotenv not installed; skipping .env loading")
             return
 
+        def _expand(value: str, ctx: dict[str, str], max_passes: int = 10) -> str:
+            import re
+            out = value
+            _VAR_RE = re.compile(r"\$\{([^}]+)\}|\$([A-Za-z_][A-Za-z0-9_]*)")
+            for _ in range(max_passes):
+                new_out = _VAR_RE.sub(lambda m: ctx.get(m.group(1) or m.group(2) or "", ""), out)
+                if new_out == out:
+                    return out
+                out = new_out
+            return out
+
         path: Optional[Path]
         if dotenv_path is None:
             candidate = Path.cwd() / ".env"
@@ -121,6 +131,16 @@ class SettingsManager:
                 continue
             self._dotenv_values[key_l] = str(v)
             loaded_count += 1
+
+        # precedence: .env first, then os.environ overrides
+        ctx = {k: str(v) for k, v in raw.items()}
+        ctx.update({k: str(v) for k, v in os.environ.items()})
+
+        expanded = {k: _expand(str(v), ctx) for k, v in raw.items()}
+
+        self._dotenv_values = expanded
+
+        logger.info(f"_dotenv_values: {self._dotenv_values}")
 
         # Make .env values available as defaults in get_setting()
         for k, v in self._dotenv_values.items():
@@ -172,12 +192,12 @@ class SettingsManager:
                 logger.warning(f"Error while syncing ENV to ApplicationSettings for {env_key}: {e}")
 
     def load_app_specific_settings(
-        self,
-        file_rel_path: str,
-        app_root: Optional[object] = None,
-        allowed_var_name: str = "ALLOWED_SETTINGS",
-        protected_var_name: str = "PROTECTED_SETTINGS",
-        default_values_var_name: str = "DEFAULT_SETTINGS_VALUES",
+            self,
+            file_rel_path: str,
+            app_root: Optional[object] = None,
+            allowed_var_name: str = "ALLOWED_SETTINGS",
+            protected_var_name: str = "PROTECTED_SETTINGS",
+            default_values_var_name: str = "DEFAULT_SETTINGS_VALUES",
     ) -> None:
         """\
         Loads additional ALLOWED/PROTECTED lists from a Python file relative to the app root
@@ -396,11 +416,19 @@ class SettingsManager:
             return default
 
         attr_name = name.upper()
-        if self._app_settings is not None and hasattr(self._app_settings, attr_name):
-            value = getattr(self._app_settings, attr_name)
-            if callable(value):
-                value = value()
-            return value
+        if self._app_settings is not None:
+            if isinstance(self._app_settings, dict):
+                if attr_name in self._app_settings:
+                    if callable(self._app_settings[attr_name]):
+                        return self._app_settings[attr_name]()
+
+                    return self._app_settings[attr_name]
+            else:
+                if hasattr(self._app_settings, attr_name):
+                    value = getattr(self._app_settings, attr_name)
+                    if callable(value):
+                        value = value()
+                    return value
 
         if name in self._cached_db_settings:
             return self._cached_db_settings[name]
