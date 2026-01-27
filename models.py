@@ -10,7 +10,7 @@ from fastapi_shared_orm import Base
 
 # SQLAlchemy model for settings
 class Setting(Base):
-    __tablename__ = "rideto_settings"
+    __tablename__ = "heitec_approver_settings"
 
     # Falls das Modul in seltenen Fällen doppelt importiert wird (z.B. durch dynamische Imports),
     # verhindert dies einen Crash. Besser ist: Importpfade konsolidieren.
