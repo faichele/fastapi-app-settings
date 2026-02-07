@@ -480,7 +480,8 @@ class SettingsManager:
         result: Dict[str, Any] = {}
         # First, all DB settings
         for name, value in self._cached_db_settings.items():
-            result[name] = value
+            if name.lower() in self._allowed_settings:
+                result[name] = value
 
         if self._app_settings is not None:
             # Then ALLOWED settings from ApplicationSettings

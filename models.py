@@ -12,9 +12,9 @@ from fastapi_shared_orm import Base
 class Setting(Base):
     __tablename__ = "heitec_approver_settings"
 
-    # Falls das Modul in seltenen Fällen doppelt importiert wird (z.B. durch dynamische Imports),
-    # verhindert dies einen Crash. Besser ist: Importpfade konsolidieren.
-    # TODO: Required?
+    # If the module is imported twice (e.g. due to dynamic imports),
+    # prevent SQLAlchemy from throwing an error because the table already exists.
+    # TODO: This is better solved by consolidating import paths.
     __table_args__ = {"extend_existing": True}
 
     id = Column(Integer, primary_key=True, index=True)
@@ -51,7 +51,7 @@ class SettingResponse(SettingBase):
     model_config = ConfigDict(from_attributes=True)
 
 
-# Definiert eine Liste aller erlaubten Einstellungsnamen
+# List of 'public' settings
 ALLOWED_SETTINGS = [
     # Paths and directories
     "image_directory",
@@ -71,26 +71,27 @@ ALLOWED_SETTINGS = [
     "supported_formats",
     "formats",
 
-    # Alben
+    # Albums
     "default_album_id",
 
-    # Anwendungseinstellungen
+    # Application settings
     "environment",
     "frontend_host",
     "api_prefix",
 
-    # CORS Einstellungen
+    # CORS settings
     "backend_cors_origins",
 
-    # E-Mail Einstellungen (nicht-sensitive Teile)
+    # E-Mail settings
     "email_reset_token_expire_hours",
     "emails_from_name",
 
-    # Sonstige Einstellungen
+    # Project name
     "project_name",
 ]
 
-# Liste der schützenswerten Einstellungen, die nicht in der Datenbank gespeichert werden sollen
+# Protected settings not stored in the database
+# Read from environment variables or .env file, not editable via API
 PROTECTED_SETTINGS = [
     "secret_key",
     "postgres_server",

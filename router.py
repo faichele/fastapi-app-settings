@@ -25,7 +25,7 @@ from .models import (
 )
 from .settings_manager import settings_manager
 
-# std logging statt projektspezifischem Logger
+# Use standard logging module to avoid dependencies on external logger managers
 logger = logging.getLogger(__name__)
 
 
