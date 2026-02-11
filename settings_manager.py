@@ -12,7 +12,10 @@ try:
 except Exception:  # pragma: no cover - optional for reusability
     default_app_settings = None  # type: ignore
 
-from .models import Setting, ALLOWED_SETTINGS as BASE_ALLOWED, PROTECTED_SETTINGS as BASE_PROTECTED
+from .models import (Setting,
+                     ALLOWED_SETTINGS as BASE_ALLOWED,
+                     PROTECTED_SETTINGS as BASE_PROTECTED,
+                     READONLY_SETTINGS as BASE_READONLY)
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -35,11 +38,15 @@ class SettingsManager:
         self._initialized = False
         # Combined setting lists (sets for easy union and case-insensitive comparisons)
         self._allowed_settings = {s.lower() for s in BASE_ALLOWED}
-        self._protected_settings = {s.lower() for s in BASE_PROTECTED}
+        self._protected_settings = {s.lower() for s in BASE_READONLY}
+        self._readonly_settings = {s.lower() for s in BASE_ALLOWED}
         # App-specific default values (lowercased keys). Values may be constants or callables.
         self._default_settings_values: Dict[str, Any] = {}
         # .env defaults (lowercased keys, string values)
         self._dotenv_values: Dict[str, str] = {}
+
+        self._app_root_path = None
+        self._bootstrap_settings: Optional[Dict[str, Any]] = None
 
     def set_app_settings(self, app_settings_obj: Optional[Any]) -> None:
         """Set/replace the ApplicationSettings instance."""
@@ -48,6 +55,8 @@ class SettingsManager:
     def initialize(
         self,
         db: Session,
+        app_root_path: Path,
+        bootstrap_settings: Optional[Dict[str, Any]] = None,
         dotenv_path: Optional[object] = None,
         dotenv_override: bool = False,
     ) -> None:
@@ -56,10 +65,21 @@ class SettingsManager:
         between ApplicationSettings and database.
 
         Optional: loads settings from a `.env` file and uses them as defaults.
+        Parameters:
+            db (Session): SQLAlchemy session object.
+            app_root_path (Path): Absolute path to the app root.
+            bootstrap_settings (Optional[Dict[str, Any]]): Dictionary of settings to bootstrap the settings manager with.
+            dotenv_path (Optional[object]): Path to the `.env` file.
+            dotenv_override (bool): Whether to override existing `.env` values with DB values.
         """
         self.db = db
         if not self._initialized:
             self._initialized = True
+
+            # Set the absolute path of the app root
+            self._app_root_path = app_root_path
+            # Store the bootstrap settings (if any)
+            self._bootstrap_settings = bootstrap_settings
 
             # Load .env first so ENV defaults are available during later reads
             self.load_dotenv(dotenv_path=dotenv_path, override=dotenv_override)
@@ -176,6 +196,7 @@ class SettingsManager:
         app_root: Optional[object] = None,
         allowed_var_name: str = "ALLOWED_SETTINGS",
         protected_var_name: str = "PROTECTED_SETTINGS",
+        readonly_var_name: str = "READONLY_SETTINGS",
         default_values_var_name: str = "DEFAULT_SETTINGS_VALUES",
     ) -> None:
         """\
@@ -202,19 +223,25 @@ class SettingsManager:
             # Retrieve variables from the module
             extra_allowed = getattr(module, allowed_var_name, None)
             extra_protected = getattr(module, protected_var_name, None)
+            extra_readonly = getattr(module, readonly_var_name, None)
             extra_defaults = getattr(module, default_values_var_name, None)
 
             if extra_allowed:
                 self._allowed_settings.update({str(s).lower() for s in extra_allowed})
             if extra_protected:
                 self._protected_settings.update({str(s).lower() for s in extra_protected})
+            if extra_readonly:
+                self._readonly_settings.update({str(s).lower() for s in extra_readonly})
             if isinstance(extra_defaults, dict):
                 # Merge defaults (lowercase keys); values can be constants or callables.
                 for k, v in extra_defaults.items():
                     self._default_settings_values[str(k).lower()] = v
 
             logger.info(
-                f"Loaded app-specific settings from {target}. Allowed: {len(self._allowed_settings)}, Protected: {len(self._protected_settings)}, Defaults: {len(self._default_settings_values)}"
+                f"Loaded app-specific settings from {target}. "
+                f"Allowed settings: {len(self._allowed_settings)}, "
+                f"Protected settings: {len(self._protected_settings)}, "
+                f"Defaults setting values: {len(self._default_settings_values)}"
             )
         except Exception as e:
             logger.error(f"Failed to load app-specific settings from {file_rel_path}: {e}")
@@ -382,39 +409,65 @@ class SettingsManager:
         self.db.commit()
 
     def get_setting(self, name: str, default: Optional[Any] = None) -> Any:
-        """\
+        """
         Returns the value of a setting.
         PROTECTED_SETTINGS are always read from ApplicationSettings.
+        Parameters:
+            name (str): Setting name.
+            default (Optional[Any]): Default value to return if setting is not found.
         """
+        logger.info(f"Reading setting '{name}' from database or ApplicationSettings")
         if name.lower() in self._protected_settings:
+            logger.info(f"Reading protected setting '{name}' from ApplicationSettings")
             if self._app_settings is None:
+                logger.warning(f"Protected setting can not be read: {name}, returning default value: {default}")
                 return default
             attr_name = name.upper()
             if hasattr(self._app_settings, attr_name):
+                logger.info(f"Reading protected setting '{name}' from ApplicationSettings as attribute: "
+                            f"{getattr(self._app_settings, attr_name)}")
                 return getattr(self._app_settings, attr_name)
+
+            logger.info(f"Returning default value for protected setting '{name}': {default}")
             return default
 
         attr_name = name.upper()
         if self._app_settings is not None and hasattr(self._app_settings, attr_name):
+            logger.info(f"Reading setting '{name}' from ApplicationSettings as attribute")
             value = getattr(self._app_settings, attr_name)
             if callable(value):
                 value = value()
+
+            logger.info(f"Returning setting '{name}' from ApplicationSettings as attribute: {value}")
             return value
 
         if name in self._cached_db_settings:
+            logger.info(f"Reading setting '{name}' from database cache")
             return self._cached_db_settings[name]
 
         if self.db:
+            logger.info(f"Reading setting '{name}' from database")
             db_setting = self.db.query(Setting).filter_by(name=name).first()
             if db_setting:
+                logger.info(f"Setting '{name}' found in database, with value: {db_setting.value}")
                 self._cached_db_settings[name] = db_setting.value
                 return db_setting.value
 
-        # Fall back to manager-provided defaults (constants or callables)
+        # Check bootstrap settings for setting with given name, if database and ApplicationSettings have "fallen through"
+        if name.lower() in self._bootstrap_settings:
+            logger.info(f"Reading setting '{name}' from bootstrap settings: "
+                        f"{self._bootstrap_settings[name.lower()]}")
+            return self._bootstrap_settings[name.lower()]
+        else:
+            logger.info(f"No setting with name '{name}' found in bootstrap settings.")
+
+        # Fall back to defaults provided by the settings manager (constants or callables)
         default_from_manager = self.get_default_value(name)
+        logger.info(f"Returning value for setting '{name}' as provided by settings manager: {default_from_manager}")
         if default_from_manager is not None:
             return default_from_manager
 
+        logger.warning(f"No value found for setting '{name}', returning default value: {default}")
         return default
 
     def set_setting(self, name: str, value: Any) -> bool:

@@ -158,7 +158,7 @@ pytest tests/test_templates.py -v
 
 - **Detaillierte Anleitung**: [TEMPLATE_USAGE.md](TEMPLATE_USAGE.md)
 - **Schnellstart**: [QUICKSTART.md](QUICKSTART.md)
-- **Hauptdokumentation**: [README.md](README.md)
+- **Hauptdokumentation**: [README.md](../../fastapi_shared_orm/README.md)
 - **Beispiele**: [example_template_usage.py](example_template_usage.py)
 
 ## 🔄 Migration bestehender Anwendungen
@@ -225,7 +225,7 @@ Das Modul ist erweiterbar. Neue Features können hinzugefügt werden:
 
 ## 📝 Lizenz
 
-MIT License - Siehe [LICENSE](LICENSE)
+MIT License - Siehe [LICENSE](../../fastapi_shared_orm/LICENSE)
 
 ## ✨ Zusammenfassung
 

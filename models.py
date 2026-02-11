@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, Any
 
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import Boolean, Column, DateTime, Integer, String
@@ -10,7 +10,7 @@ from fastapi_shared_orm import Base
 
 # SQLAlchemy model for settings
 class Setting(Base):
-    __tablename__ = "heitec_approver_settings"
+    __tablename__ = "rideto_settings"
 
     # If the module is imported twice (e.g. due to dynamic imports),
     # prevent SQLAlchemy from throwing an error because the table already exists.
@@ -28,7 +28,7 @@ class Setting(Base):
 
 class SettingBase(BaseModel):
     name: str
-    value: str
+    value: Any
     is_protected: bool = False
     is_dynamic: bool = True
 
@@ -52,6 +52,8 @@ class SettingResponse(SettingBase):
 
 
 # List of 'public' settings
+# List of all allowed settings
+# TODO: Make this configurable, and non-agnostic to a specific project
 ALLOWED_SETTINGS = [
     # Paths and directories
     "image_directory",
@@ -65,12 +67,6 @@ ALLOWED_SETTINGS = [
     "thumbnail_size",
     "thumbnail_size_type",
 
-    # Supported image formats (and aliases)
-    # TODO: Clean up aliases - this is a mess
-    "supported_image_formats",
-    "supported_formats",
-    "formats",
-
     # Albums
     "default_album_id",
 
@@ -82,14 +78,29 @@ ALLOWED_SETTINGS = [
     # CORS settings
     "backend_cors_origins",
 
+    # E-mail settings (non-sensitive parts)
     # E-Mail settings
     "email_reset_token_expire_hours",
     "emails_from_name",
 
+    # Other settings
     # Project name
     "project_name",
 ]
 
+# List of all read-only settings
+# TODO: Make this configurable, and non-agnostic to a specific project
+READONLY_SETTINGS = [
+    # Supported image formats (and aliases)
+    # TODO: Clean up aliases - this is a mess
+    "supported_image_formats",
+    "supported_formats",
+    "formats",
+]
+
+# List of all protected settings
+# Not saved in database
+# TODO: Make this configurable, and non-agnostic to a specific project
 # Protected settings not stored in the database
 # Read from environment variables or .env file, not editable via API
 PROTECTED_SETTINGS = [

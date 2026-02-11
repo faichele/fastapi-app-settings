@@ -158,6 +158,7 @@ def create_settings_router(
         # If the setting value is not found in the SettingsManager, query it from the database
         if setting_value is None:
             setting = db.query(Setting).filter_by(name=name).first()
+            # If found in the database, return the value stored there
             if setting:
                 setting_value = setting.value
                 setting_created_date = setting.created_date
@@ -185,85 +186,24 @@ def create_settings_router(
                     supported_extensions_str = ";".join(extensions.keys())
 
                     # TODO: Consolidate default_values - this is a mess
-                    default_values = {
-                        "image_directory": "static/images",
-                        "absolute_image_directory": "static/images",
-                        "thumbnail_size": "200,200",
-                        "thumbnail_size_type": "absolute",
-                        # TODO: One alias for supported image formats instead of three!
-                        "formats": supported_extensions_str,
-                        "supported_formats": supported_extensions_str,
-                        "supported_image_formats": supported_extensions_str,
-                        "upload": "static/uploads",
-                        "upload_directory": "static/uploads",
-                        "absolute_upload_directory": "static/uploads",
-                        "thumbnails": "static/thumbnails",
-                        "thumbnail_directory": "static/thumbnails",
-                        "absolute_thumbnail_directory": "static/thumb",
-                        "default-album": 1,
-                    }
-                    if name in default_values:
-                        setting_value = default_values[name]
-                        setting_created_date = datetime.datetime.now(datetime.UTC)
-                        setting_updated_date = datetime.datetime.now(datetime.UTC)
-                        setting_is_dynamic = True
-                        setting_is_protected = (name in protected_set)
+                    # TODO: Read default values from application specific settings file instead of hardcoding them here!
 
-                        settings_manager.set_setting(name, setting_value)
-                        setting = db.query(Setting).filter_by(name=name).first()
+                    if settings_manager.get_default_settings_values():
+                        default_values = settings_manager.get_default_settings_values()
+                        if name in default_values:
+                            setting_value = default_values[name]
+                            setting_created_date = datetime.datetime.now(datetime.UTC)
+                            setting_updated_date = datetime.datetime.now(datetime.UTC)
+                            setting_is_dynamic = True
+                            setting_is_protected = (name in protected_set)
+
+                            settings_manager.set_setting(name, setting_value)
+                            setting = db.query(Setting).filter_by(name=name).first()
+                        else:
+                            raise HTTPException(status_code=404,
+                                                detail=f"Setting '{name}' not found (/api/settings/{name})")
                     else:
                         raise HTTPException(status_code=404, detail=f"Setting '{name}' not found (/api/settings/{name})")
-
-        # Special handling for absolute paths
-        # TODO: Simplify, the path logic is the same for all three settings below!
-        if name == "absolute_image_directory":
-            # Get base directory of FastAPI application (parent directory of settings_router.py)
-            base_dir = pathlib.Path(__file__).parent.parent.absolute()
-
-            # Combine base directory with the setting value
-            full_path = os.path.join(str(base_dir), setting_value)
-
-            # Normalize the path to remove any redundant separators
-            normalized_path = os.path.normpath(full_path)
-            setting_value = normalized_path
-
-            logger.info(
-                f"Got query for absolute_image_directory: Base directory={base_dir}, setting value={setting_value}, absolute path={normalized_path}"
-            )
-            setting_created_date = datetime.datetime.now(datetime.UTC)
-        elif name == "absolute_upload_directory":
-            # Get base directory of FastAPI application (parent directory of settings_router.py)
-            base_dir = pathlib.Path(__file__).parent.parent.absolute()
-
-            # Combine base directory with the setting value
-            full_path = os.path.join(str(base_dir), setting_value)
-
-            # Normalize the path to remove any redundant separators
-            normalized_path = os.path.normpath(full_path)
-            setting_value = normalized_path
-
-            logger.info(
-                f"Got query for absolute_upload_directory: Base directory={base_dir}, setting value={setting_value}, absolute path={normalized_path}"
-            )
-        elif name == "absolute_thumbnail_directory":
-            # Get base directory of FastAPI application (parent directory of settings_router.py)
-            base_dir = pathlib.Path(__file__).parent.parent.absolute()
-
-            # Combine base directory with the setting value
-            full_path = os.path.join(str(base_dir), setting_value)
-
-            # Normalize the path to remove any redundant separators
-            normalized_path = os.path.normpath(full_path)
-            setting_value = normalized_path
-
-            logger.info(
-                f"Got query for absolute_thumbnail_directory: Base directory={base_dir}, setting value={setting_value}, absolute path={normalized_path}"
-            )
-        elif name == "thumbnail_settings":
-            logger.info(f"Received query for thumbnail_settings")
-            setting_value = {
-                ''
-            }
         else:
             setting = db.query(Setting).filter_by(name=name).first()
             if not setting:
@@ -272,8 +212,8 @@ def create_settings_router(
             setting_id = setting.id
             setting_value = setting.value
 
-            logger.info(f"Returning setting: '{name}' with value '{setting_value}': "
-                        f"is_dynamic = {setting.is_dynamic}, is_protected = {setting.is_protected}")
+        logger.info(f"Returning setting: '{name}' with value '{setting_value}': "
+                    f"is_dynamic = {setting.is_dynamic}, is_protected = {setting.is_protected}")
 
         setting_response = SettingResponse(
             id=setting_id,
@@ -351,137 +291,6 @@ def create_settings_router(
         protected_set = set(settings_manager.get_protected_settings())
         db_settings = db.query(Setting).all()
         return [s for s in db_settings if s.name.lower() not in protected_set]
-
-    @router.get("/default_album_id")
-    async def get_default_album(db: Session = Depends(db_dependency)):
-        """
-        Returns the default album ID.
-        """
-        if not settings_manager._initialized:
-            settings_manager.initialize(db)
-
-        album_id = settings_manager.get_setting("default_album_id", "")
-
-        return {"name": "default_album_id", "value": album_id}
-
-    @router.put("/default_album_id")
-    async def update_default_album(setting_data: dict, db: Session = Depends(db_dependency)):
-        """
-        Updates the default album ID.
-        """
-        if not settings_manager._initialized:
-            settings_manager.initialize(db)
-
-        success = settings_manager.set_setting("default_album_id", setting_data.get("value", ""))
-
-        if not success:
-            raise HTTPException(status_code=500, detail="Fehler beim Aktualisieren der default_album_id-Einstellung")
-
-        return {"name": "default_album_id", "value": setting_data.get("value", "")}
-
-    @router.put("/thumbnail_settings")
-    async def update_thumbnail_settings(
-        thumbnail_directory: str,
-        thumbnail_width: int,
-        thumbnail_height: int,
-        db: Session = Depends(db_dependency),
-    ):
-        """
-        Updates the thumbnail settings (directory and size).
-        """
-        try:
-            if not settings_manager._initialized:
-                settings_manager.initialize(db)
-            directory_success = settings_manager.set_setting("thumbnail_directory", thumbnail_directory)
-            size_value = f"{thumbnail_width},{thumbnail_height}"
-            size_success = settings_manager.set_setting("thumbnail_size", size_value)
-            if not (directory_success and size_success):
-                raise HTTPException(status_code=500, detail="Fehler beim Aktualisieren der Thumbnail-Einstellungen")
-            return {"status": "success", "message": "Thumbnail settings saved successfully"}
-        except Exception as e:
-            logger.error(f"Error occurred while saving thumbnail settings: {str(e)}")
-            raise HTTPException(status_code=500, detail=f"Error occurred while saving thumbnail settings: {str(e)}")
-
-    @router.get("/thumbnail_settings", response_model=List[SettingResponse])
-    async def get_thumbnail_settings(db: Session = Depends(db_dependency)) -> List[SettingResponse]:
-        """
-        Returns the current thumbnail settings (directory and size).
-        """
-        try:
-            if not settings_manager._initialized:
-                settings_manager.initialize(db)
-            thumbnail_directory = settings_manager.get_setting("thumbnail_directory")
-            thumbnail_size = settings_manager.get_setting("thumbnail_size")
-            thumbnail_size_type = settings_manager.get_setting("thumbnail_size_type")
-
-            # TODO: SettingsManager should not only provide value but SettingResponse for each setting?
-            thumbnail_settings = [
-                SettingResponse(
-                    name="thumbnail_directory",
-                    value=thumbnail_directory,
-                    is_dynamic=True,
-                    is_protected=False,
-                    created_date=datetime.datetime.now(datetime.UTC),
-                    updated_date=datetime.datetime.now(datetime.UTC)
-                ),
-                SettingResponse(
-                    name="thumbnail_size",
-                    value=thumbnail_size,
-                    is_dynamic=True,
-                    is_protected=False,
-                    created_date=datetime.datetime.now(datetime.UTC),
-                    updated_date=datetime.datetime.now(datetime.UTC)
-                ),
-                SettingResponse(
-                    name="thumbnail_size_type",
-                    value=thumbnail_size_type,
-                    is_dynamic=True,
-                    is_protected=False,
-                    created_date=datetime.datetime.now(datetime.UTC),
-                    updated_date=datetime.datetime.now(datetime.UTC)
-                )
-            ]
-
-            json_response = JSONResponse(
-                {
-                    "thumbnail_directory": thumbnail_directory,
-                    "thumbnail_size": thumbnail_size,
-                    "thumbnail_size_type": thumbnail_size_type,
-                })
-
-            logger.info(f"Thumbnail settings: {thumbnail_settings}")
-
-            return thumbnail_settings
-        except Exception as e:
-            logger.error(f"Error occurred while retrieving thumbnail settings: {str(e)}")
-            raise HTTPException(status_code=500, detail=f"Error occurred while retrieving thumbnail settings: {str(e)}")
-
-    @router.post("/reset_supported_formats", response_model=SettingResponse)
-    async def reset_supported_formats(db: Session = Depends(db_dependency)):
-        """
-        Resets the supported image formats to the default value.
-        """
-        try:
-            if not settings_manager._initialized:
-                settings_manager.initialize(db)
-            extensions = Image.registered_extensions()
-            supported_extensions_str = ";".join(sorted(extensions.keys()))
-            success = settings_manager.set_setting("supported_image_formats", supported_extensions_str)
-            if not success:
-                raise HTTPException(status_code=500, detail="Fehler beim Zurücksetzen der unterstützten Bildformate")
-            setting = db.query(Setting).filter_by(name="supported_image_formats").first()
-            return SettingResponse(
-                id=setting.id,
-                name="supported_image_formats",
-                value=supported_extensions_str,
-                created_date=setting.created_date,
-                updated_date=setting.updated_date,
-                is_protected=setting.is_protected,
-                is_dynamic=setting.is_dynamic,
-            )
-        except Exception as e:
-            logger.error(f"Error occurred while resetting supported image formats: {e}")
-            raise HTTPException(status_code=500, detail=f"Error occurred while resetting supported image formats: {str(e)}")
 
     # Template rendering endpoints (only added if templates are enabled)
     if templates is not None:

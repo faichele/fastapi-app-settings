@@ -116,7 +116,7 @@ Erstellen Sie ein Template, das `settings_base.html` erweitert:
 {% endblock %}
 ```
 
-Weitere Details siehe [TEMPLATE_USAGE.md](TEMPLATE_USAGE.md).
+Weitere Details siehe [TEMPLATE_USAGE.md](docs/TEMPLATE_USAGE.md).
 
 ## Entwickeln
 
