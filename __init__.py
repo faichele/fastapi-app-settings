@@ -8,6 +8,7 @@ from .models import (
     SettingResponse,
     ALLOWED_SETTINGS,
     PROTECTED_SETTINGS,
+    READONLY_SETTINGS
 )
 
 __version__ = "0.0.2"
@@ -23,4 +24,5 @@ __all__ = [
     "SettingResponse",
     "ALLOWED_SETTINGS",
     "PROTECTED_SETTINGS",
+    "READONLY_SETTINGS"
 ]

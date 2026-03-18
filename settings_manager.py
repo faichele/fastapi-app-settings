@@ -1,7 +1,8 @@
 import logging
 import importlib.util
 import traceback
-from typing import Any, Dict, Iterable, Optional
+from dataclasses import dataclass
+from typing import Any, Dict, Iterable, Optional, Callable, Mapping
 from pathlib import Path
 import os
 
@@ -19,6 +20,36 @@ from .models import (Setting,
 
 # Configure logging
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class SettingsManagerContext:
+    """Context-Objekt, das Resolvern aus `EXTRA_SETTINGS_MAP` bereitgestellt wird."""
+
+    app_root_path: Path | None
+    manager: "SettingsManager"
+
+
+def _dynamic_import_module(module_path: Path, module_name: str) -> Any | None:
+    """Dynamischer Import eines Python-Moduls von Dateipfad.
+
+    Analog zum Pattern in `router._dynamic_import_router`.
+    """
+    try:
+        if not module_path.exists():
+            logger.warning(f"Extra settings module file not found: {module_path}")
+            return None
+        spec = importlib.util.spec_from_file_location(module_name, str(module_path))
+        if spec is None or spec.loader is None:
+            logger.warning(f"Could not load spec for extra settings module: {module_path}")
+            return None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    except Exception as e:
+        logger.error(f"Failed to dynamically import module from {module_path}: {e}")
+        traceback.print_exc()
+        return None
 
 
 class SettingsManager:
@@ -42,6 +73,8 @@ class SettingsManager:
         self._readonly_settings = {s.lower() for s in BASE_ALLOWED}
         # App-specific default values (lowercased keys). Values may be constants or callables.
         self._default_settings_values: Dict[str, Any] = {}
+        # App-specific resolver map (lowercased keys). Values are callables.
+        self._extra_settings_map: Dict[str, Callable[[SettingsManagerContext], Any]] = {}
         # .env defaults (lowercased keys, string values)
         self._dotenv_values: Dict[str, str] = {}
 
@@ -198,6 +231,7 @@ class SettingsManager:
         protected_var_name: str = "PROTECTED_SETTINGS",
         readonly_var_name: str = "READONLY_SETTINGS",
         default_values_var_name: str = "DEFAULT_SETTINGS_VALUES",
+        extra_settings_map_var_name: str = "EXTRA_SETTINGS_MAP",
     ) -> None:
         """\
         Loads additional ALLOWED/PROTECTED lists from a Python file relative to the app root
@@ -205,6 +239,10 @@ class SettingsManager:
 
         The file should expose variables with lists (e.g. ALLOWED_SETTINGS, PROTECTED_SETTINGS)
         and can optionally provide DEFAULT_SETTINGS_VALUES.
+
+        Extension:
+        - If `EXTRA_SETTINGS_MAP` is present, it must be a dict[str, callable]. The callable
+          will be used by `get_default_value()` to compute dynamic defaults.
         """
         try:
             base = Path(str(app_root)) if app_root else Path.cwd()
@@ -213,18 +251,16 @@ class SettingsManager:
                 logger.warning(f"Extra settings file not found: {target}")
                 return
 
-            spec = importlib.util.spec_from_file_location("app_specific_settings", str(target))
-            if spec is None or spec.loader is None:
-                logger.warning(f"Could not load spec for extra settings file: {target}")
+            module = _dynamic_import_module(target, module_name="app_specific_settings")
+            if module is None:
                 return
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
 
             # Retrieve variables from the module
             extra_allowed = getattr(module, allowed_var_name, None)
             extra_protected = getattr(module, protected_var_name, None)
             extra_readonly = getattr(module, readonly_var_name, None)
             extra_defaults = getattr(module, default_values_var_name, None)
+            extra_map = getattr(module, extra_settings_map_var_name, None)
 
             if extra_allowed:
                 self._allowed_settings.update({str(s).lower() for s in extra_allowed})
@@ -237,11 +273,29 @@ class SettingsManager:
                 for k, v in extra_defaults.items():
                     self._default_settings_values[str(k).lower()] = v
 
+            if isinstance(extra_map, dict):
+                merged = 0
+                for k, v in extra_map.items():
+                    if k is None:
+                        continue
+                    key_l = str(k).lower()
+                    if not callable(v):
+                        logger.warning(
+                            f"Ignoring EXTRA_SETTINGS_MAP entry for '{key_l}': value is not callable"
+                        )
+                        continue
+                    # Later definitions override earlier ones
+                    self._extra_settings_map[key_l] = v
+                    merged += 1
+
+                logger.info(f"Loaded EXTRA_SETTINGS_MAP entries: {merged}")
+
             logger.info(
                 f"Loaded app-specific settings from {target}. "
                 f"Allowed settings: {len(self._allowed_settings)}, "
                 f"Protected settings: {len(self._protected_settings)}, "
-                f"Defaults setting values: {len(self._default_settings_values)}"
+                f"Defaults setting values: {len(self._default_settings_values)}, "
+                f"Extra settings map: {len(self._extra_settings_map)}"
             )
         except Exception as e:
             logger.error(f"Failed to load app-specific settings from {file_rel_path}: {e}")
@@ -264,11 +318,23 @@ class SettingsManager:
     def get_default_value(self, name: str) -> Optional[Any]:
         """Return the default value for a setting.
 
-        Supports both constants and callables in DEFAULT_SETTINGS_VALUES.
-        If a callable is used, it is executed on access. If execution fails,
-        the error is logged and `None` is returned.
+        Priority order:
+        1) `EXTRA_SETTINGS_MAP[name]` (callable called with a `SettingsManagerContext`)
+        2) `DEFAULT_SETTINGS_VALUES[name]` (constant or callable with no args)
+
+        If execution fails, the error is logged and `None` is returned.
         """
         key = name.lower()
+
+        if key in self._extra_settings_map:
+            resolver = self._extra_settings_map[key]
+            try:
+                ctx = SettingsManagerContext(app_root_path=self._app_root_path, manager=self)
+                return resolver(ctx)
+            except Exception as e:  # pragma: no cover
+                logger.error(f"Error while evaluating EXTRA_SETTINGS_MAP for setting '{name}': {e}")
+                return None
+
         if key not in self._default_settings_values:
             return None
 
@@ -431,6 +497,15 @@ class SettingsManager:
             logger.info(f"Returning default value for protected setting '{name}': {default}")
             return default
 
+        # Check extra settings map for setting with given name, if database and ApplicationSettings have "fallen through"
+        logger.info(f"Extra settings map: {self._extra_settings_map}")
+        if self._extra_settings_map is not None and name.lower() in self._extra_settings_map:
+            logger.info(f"Reading setting '{name}' from extra settings map: "
+                        f"{self._extra_settings_map[name.lower()]}")
+            return self._extra_settings_map[name.lower()]()
+        else:
+            logger.info(f"No setting with name '{name}' found in extra settings map.")
+
         attr_name = name.upper()
         if self._app_settings is not None and hasattr(self._app_settings, attr_name):
             logger.info(f"Reading setting '{name}' from ApplicationSettings as attribute")
@@ -454,7 +529,7 @@ class SettingsManager:
                 return db_setting.value
 
         # Check bootstrap settings for setting with given name, if database and ApplicationSettings have "fallen through"
-        if name.lower() in self._bootstrap_settings:
+        if self._bootstrap_settings is not None and name.lower() in self._bootstrap_settings:
             logger.info(f"Reading setting '{name}' from bootstrap settings: "
                         f"{self._bootstrap_settings[name.lower()]}")
             return self._bootstrap_settings[name.lower()]

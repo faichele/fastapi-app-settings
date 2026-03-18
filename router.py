@@ -137,7 +137,9 @@ def create_settings_router(
         """
         # Initialize the SettingsManager, if not already initialized
         if not settings_manager._initialized:
-            settings_manager.initialize(db)
+            app_root = Path(__file__).parent
+            settings_manager.initialize(db=db,
+                                        app_root_path=app_root)
 
         protected_set = set(settings_manager.get_protected_settings())
 
@@ -148,12 +150,17 @@ def create_settings_router(
             )
 
         # Retrieve the setting value using the SettingsManager
+
+        logger.info(f"Retrieving setting from settings_manager: '{name}'...")
+
         setting_id = -1
         setting_value = settings_manager.get_setting(name)
         setting_created_date = datetime.datetime.now(datetime.UTC)
         setting_updated_date = datetime.datetime.now(datetime.UTC)
         setting_is_protected = False
         setting_is_dynamic = True
+
+        logger.info(f"Retrieved setting from settings_manager: '{name}' with value '{setting_value}'")
 
         # If the setting value is not found in the SettingsManager, query it from the database
         if setting_value is None:
@@ -242,7 +249,9 @@ def create_settings_router(
         """
         # Initialize the SettingsManager, if not already initialized
         if not settings_manager._initialized:
-            settings_manager.initialize(db)
+            app_root = Path(__file__).parent
+            settings_manager.initialize(db=db,
+                                        app_root_path=app_root)
 
         protected_set = set(settings_manager.get_protected_settings())
         allowed_set = set(settings_manager.get_allowed_settings())
@@ -287,7 +296,10 @@ def create_settings_router(
         Protected settings are not included in the response.
         """
         if not settings_manager._initialized:
-            settings_manager.initialize(db)
+            app_root = Path(__file__).parent
+            settings_manager.initialize(db=db,
+                                        app_root_path=app_root)
+
         protected_set = set(settings_manager.get_protected_settings())
         db_settings = db.query(Setting).all()
         return [s for s in db_settings if s.name.lower() not in protected_set]
@@ -301,7 +313,9 @@ def create_settings_router(
             This endpoint provides a web interface for viewing and editing settings.
             """
             if not settings_manager._initialized:
-                settings_manager.initialize(db)
+                app_root = Path(__file__).parent
+                settings_manager.initialize(db=db,
+                                            app_root_path=app_root)
 
             # Get all settings for rendering
             all_settings = settings_manager.get_all_settings()
@@ -342,7 +356,9 @@ def create_settings_router(
             Updates multiple settings at once and re-renders the page with a success message.
             """
             if not settings_manager._initialized:
-                settings_manager.initialize(db)
+                app_root = Path(__file__).parent
+                settings_manager.initialize(db=db,
+                                            app_root_path=app_root)
 
             try:
                 # Parse form data

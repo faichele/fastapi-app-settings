@@ -51,25 +51,8 @@ class SettingResponse(SettingBase):
     model_config = ConfigDict(from_attributes=True)
 
 
-# List of 'public' settings
-# List of all allowed settings
-# TODO: Make this configurable, and non-agnostic to a specific project
+# List of public settings
 ALLOWED_SETTINGS = [
-    # Paths and directories
-    "image_directory",
-    "absolute_image_directory",
-    "thumbnail_directory",
-    "absolute_thumbnail_directory",
-    "upload_directory",
-    "absolute_upload_directory",
-
-    # Thumbnails
-    "thumbnail_size",
-    "thumbnail_size_type",
-
-    # Albums
-    "default_album_id",
-
     # Application settings
     "environment",
     "frontend_host",
@@ -79,11 +62,9 @@ ALLOWED_SETTINGS = [
     "backend_cors_origins",
 
     # E-mail settings (non-sensitive parts)
-    # E-Mail settings
     "email_reset_token_expire_hours",
     "emails_from_name",
 
-    # Other settings
     # Project name
     "project_name",
 ]
