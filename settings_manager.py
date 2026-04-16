@@ -69,8 +69,8 @@ class SettingsManager:
         self._initialized = False
         # Combined setting lists (sets for easy union and case-insensitive comparisons)
         self._allowed_settings = {s.lower() for s in BASE_ALLOWED}
-        self._protected_settings = {s.lower() for s in BASE_READONLY}
-        self._readonly_settings = {s.lower() for s in BASE_ALLOWED}
+        self._protected_settings = {s.lower() for s in BASE_PROTECTED}
+        self._readonly_settings = {s.lower() for s in BASE_READONLY}
         # App-specific default values (lowercased keys). Values may be constants or callables.
         self._default_settings_values: Dict[str, Any] = {}
         # App-specific resolver map (lowercased keys). Values are callables.
@@ -315,6 +315,19 @@ class SettingsManager:
         """
         return dict(self._default_settings_values)
 
+    def _resolver_context(self) -> SettingsManagerContext:
+        return SettingsManagerContext(app_root_path=self._app_root_path, manager=self)
+
+    def _invoke_extra_settings_resolver(self, name: str, resolver: Callable[..., Any]) -> Any:
+        try:
+            return resolver(self._resolver_context())
+        except TypeError:
+            # Rückwärtskompatibilität für ältere Resolver ohne ctx-Parameter.
+            return resolver()
+        except Exception as e:  # pragma: no cover
+            logger.error(f"Error while evaluating EXTRA_SETTINGS_MAP for setting '{name}': {e}")
+            return None
+
     def get_default_value(self, name: str) -> Optional[Any]:
         """Return the default value for a setting.
 
@@ -328,12 +341,7 @@ class SettingsManager:
 
         if key in self._extra_settings_map:
             resolver = self._extra_settings_map[key]
-            try:
-                ctx = SettingsManagerContext(app_root_path=self._app_root_path, manager=self)
-                return resolver(ctx)
-            except Exception as e:  # pragma: no cover
-                logger.error(f"Error while evaluating EXTRA_SETTINGS_MAP for setting '{name}': {e}")
-                return None
+            return self._invoke_extra_settings_resolver(name, resolver)
 
         if key not in self._default_settings_values:
             return None
@@ -502,7 +510,7 @@ class SettingsManager:
         if self._extra_settings_map is not None and name.lower() in self._extra_settings_map:
             logger.info(f"Reading setting '{name}' from extra settings map: "
                         f"{self._extra_settings_map[name.lower()]}")
-            return self._extra_settings_map[name.lower()]()
+            return self._invoke_extra_settings_resolver(name, self._extra_settings_map[name.lower()])
         else:
             logger.info(f"No setting with name '{name}' found in extra settings map.")
 

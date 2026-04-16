@@ -5,6 +5,9 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+
+from fastapi_shared_orm import Base
 
 
 def setup_sqlite_file_db(tmp_name: str = "app_settings_test.db"):
@@ -83,4 +86,44 @@ def test_dynamic_router(tmp_path: Path):
     r = client.get("/api/settings/ping")
     assert r.status_code == 200
     assert r.json() == {"pong": True}
+
+
+def test_create_settings_router_with_database_url_only(tmp_path: Path):
+    db_path = tmp_path / "app_settings_standalone.db"
+    database_url = f"sqlite:///{db_path}"
+
+    # Tabellen für das standalone Paketmodell anlegen
+    from fastapi_app_settings import Setting, create_settings_router
+
+    engine = create_engine(database_url)
+    Base.metadata.create_all(bind=engine, tables=[Setting.__table__])
+
+    extra = tmp_path / "extra_settings.py"
+    extra.write_text(
+        "\n".join([
+            "ALLOWED_SETTINGS = ['custom_allowed']",
+            "PROTECTED_SETTINGS = []",
+            "DEFAULT_SETTINGS_VALUES = {'custom_allowed': 'fallback'}",
+        ])
+    )
+
+    app = FastAPI()
+    app.include_router(
+        create_settings_router(
+            prefix="/api/settings",
+            database_url=database_url,
+            app_root=tmp_path,
+            extra_settings_file="extra_settings.py",
+        )
+    )
+    client = TestClient(app)
+
+    put_response = client.put("/api/settings/custom_allowed", json={"value": "42"})
+    assert put_response.status_code == 200
+    assert put_response.json()["value"] == "42"
+
+    get_response = client.get("/api/settings/custom_allowed")
+    assert get_response.status_code == 200
+    assert get_response.json()["value"] == "42"
+
 

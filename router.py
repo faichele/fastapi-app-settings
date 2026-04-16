@@ -9,14 +9,11 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Path as FPath, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
+from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
+from sqlalchemy.orm import sessionmaker
 from PIL import Image
 from starlette.responses import JSONResponse
-
-try:
-    from backend.database.base import get_db as default_get_db  # type: ignore
-except Exception:  # pragma: no cover
-    default_get_db = None  # type: ignore
 
 from .models import (
     Setting,
@@ -27,6 +24,41 @@ from .settings_manager import settings_manager
 
 # Use standard logging module to avoid dependencies on external logger managers
 logger = logging.getLogger(__name__)
+
+
+def _resolve_backend_get_db() -> Callable[[], Generator[Session, None, None]] | None:
+    """Lädt optional die get_db-Dependency aus einer Host-App.
+
+    Der Import erfolgt bewusst lazy, damit das Paket ohne Backend-Kopplung
+    importierbar bleibt und keine Zirkelimporte auf Modulebene entstehen.
+    """
+    try:
+        from backend.database.base import get_db as backend_get_db  # type: ignore
+
+        return backend_get_db
+    except Exception as e:  # pragma: no cover - optional fallback path
+        logger.info(f"No backend get_db fallback available: {e}")
+        return None
+
+
+def _create_session_factory(database_url: Any) -> sessionmaker:
+    if hasattr(database_url, "unicode_string"):
+        database_url = database_url.unicode_string()
+    engine = create_engine(str(database_url))
+    return sessionmaker(bind=engine, autocommit=False, autoflush=False)
+
+
+def _make_get_db_dependency(
+    session_factory: Callable[[], Session],
+) -> Callable[[], Generator[Session, None, None]]:
+    def _get_db() -> Generator[Session, None, None]:
+        db = session_factory()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    return _get_db
 
 
 def _dynamic_import_router(module_path: Path, attr_name: str = "router") -> Any | None:
@@ -49,6 +81,8 @@ def _dynamic_import_router(module_path: Path, attr_name: str = "router") -> Any 
 def create_settings_router(
     prefix: str = "/api/settings",
     get_db: Callable[[], Generator[Session, None, None]] | None = None,
+    session_factory: Callable[[], Session] | None = None,
+    database_url: Any | None = None,
     *,
     app_root: str | Path | None = None,
     extra_settings_file: str | None = None,
@@ -66,6 +100,10 @@ def create_settings_router(
     Args:
         prefix: optional API prefix, default: "/api/settings"
         get_db: optional, dependency factory for DB sessions. Using get_db from database.base if not provided.
+        session_factory: optional, zero-arg callable returning a SQLAlchemy Session.
+            Used when no explicit get_db dependency is injected.
+        database_url: optional, database URL for creating an internal SQLAlchemy session factory.
+            Useful when this package is used standalone outside the backend application.
         app_root: optional, root directory of the FastAPI application. Used to resolve relative paths.
         extra_settings_file: optional, relative path to a Python file (from app_root) that provides
         additional ALLOWED/PROTECTED settings lists and default values. Lists are merged with the defaults.
@@ -75,9 +113,26 @@ def create_settings_router(
         templates_directory: optional, custom templates directory. If None, uses package's built-in templates
         custom_template_name: optional, custom template file name to use instead of default
     """
-    db_dependency = get_db if get_db is not None else default_get_db
+    if get_db is not None:
+        db_dependency = get_db
+    elif session_factory is not None:
+        db_dependency = _make_get_db_dependency(session_factory)
+    elif database_url is not None:
+        db_dependency = _make_get_db_dependency(_create_session_factory(database_url))
+    else:
+        db_dependency = _resolve_backend_get_db()
+
     if db_dependency is None:
-        raise RuntimeError("No get_db dependency provided and backend.database.base.get_db not available")
+        raise RuntimeError(
+            "No database dependency available. Provide get_db, session_factory, "
+            "or database_url, or use this package within a backend exposing backend.database.base.get_db."
+        )
+
+    base = Path(app_root) if app_root else Path.cwd()
+    settings_manager._initialized = False
+    settings_manager.db = None
+    settings_manager._cached_db_settings = {}
+    settings_manager._app_root_path = base
 
     # Setup Jinja2 templates if enabled
     templates = None
@@ -86,7 +141,6 @@ def create_settings_router(
             # Use custom templates directory
             template_path = Path(templates_directory)
             if not template_path.is_absolute():
-                base = Path(app_root) if app_root else Path.cwd()
                 template_path = (base / template_path).resolve()
         else:
             # Use package's built-in templates
@@ -103,7 +157,6 @@ def create_settings_router(
     if extra_settings_file:
         try:
             logger.info(f"Loading app-specific settings from {extra_settings_file}")
-            base = Path(app_root) if app_root else Path.cwd()
             settings_manager.load_app_specific_settings(
                 file_rel_path=extra_settings_file,
                 app_root=base,
@@ -137,9 +190,8 @@ def create_settings_router(
         """
         # Initialize the SettingsManager, if not already initialized
         if not settings_manager._initialized:
-            app_root = Path(__file__).parent
             settings_manager.initialize(db=db,
-                                        app_root_path=app_root)
+                                        app_root_path=base)
 
         protected_set = set(settings_manager.get_protected_settings())
 
@@ -214,6 +266,9 @@ def create_settings_router(
         else:
             setting = db.query(Setting).filter_by(name=name).first()
             if not setting:
+                settings_manager.set_setting(name, setting_value)
+                setting = db.query(Setting).filter_by(name=name).first()
+            if not setting:
                 raise HTTPException(status_code=404, detail=f"Setting '{name}' not found after creation attempt")
 
             setting_id = setting.id
@@ -249,9 +304,8 @@ def create_settings_router(
         """
         # Initialize the SettingsManager, if not already initialized
         if not settings_manager._initialized:
-            app_root = Path(__file__).parent
             settings_manager.initialize(db=db,
-                                        app_root_path=app_root)
+                                        app_root_path=base)
 
         protected_set = set(settings_manager.get_protected_settings())
         allowed_set = set(settings_manager.get_allowed_settings())
@@ -296,9 +350,8 @@ def create_settings_router(
         Protected settings are not included in the response.
         """
         if not settings_manager._initialized:
-            app_root = Path(__file__).parent
             settings_manager.initialize(db=db,
-                                        app_root_path=app_root)
+                                        app_root_path=base)
 
         protected_set = set(settings_manager.get_protected_settings())
         db_settings = db.query(Setting).all()
@@ -313,9 +366,8 @@ def create_settings_router(
             This endpoint provides a web interface for viewing and editing settings.
             """
             if not settings_manager._initialized:
-                app_root = Path(__file__).parent
                 settings_manager.initialize(db=db,
-                                            app_root_path=app_root)
+                                            app_root_path=base)
 
             # Get all settings for rendering
             all_settings = settings_manager.get_all_settings()
@@ -356,9 +408,8 @@ def create_settings_router(
             Updates multiple settings at once and re-renders the page with a success message.
             """
             if not settings_manager._initialized:
-                app_root = Path(__file__).parent
                 settings_manager.initialize(db=db,
-                                            app_root_path=app_root)
+                                            app_root_path=base)
 
             try:
                 # Parse form data

@@ -2,28 +2,14 @@ from datetime import datetime, timezone
 from typing import Optional, Any
 
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import Boolean, Column, DateTime, Integer, String
 
 # Shared SQLAlchemy Base class
 from fastapi_shared_orm import Base
 
+from .model_factory import create_setting_models
 
-# SQLAlchemy model for settings
-class Setting(Base):
-    __tablename__ = "rideto_settings"
-
-    # If the module is imported twice (e.g. due to dynamic imports),
-    # prevent SQLAlchemy from throwing an error because the table already exists.
-    # TODO: This is better solved by consolidating import paths.
-    __table_args__ = {"extend_existing": True}
-
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, unique=True, nullable=False, index=True)
-    value = Column(String, nullable=False)
-    created_date = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    updated_date = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
-    is_protected = Column(Boolean, default=False)
-    is_dynamic = Column(Boolean, default=True)
+_DEFAULT_SETTING_MODELS = create_setting_models(Base)
+Setting = _DEFAULT_SETTING_MODELS.Setting
 
 
 class SettingBase(BaseModel):
