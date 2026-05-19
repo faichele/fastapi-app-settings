@@ -15,7 +15,9 @@ from typing import Any
 
 from sqlalchemy import Boolean, Column, DateTime, Integer, String
 
-DEFAULT_SETTING_TABLE_PREFIX = "rideto_"
+# Default prefix is empty,
+# resulting in the Settings table named plainly as 'settings'
+DEFAULT_SETTING_TABLE_PREFIX = ""
 
 
 @dataclass(frozen=True)
