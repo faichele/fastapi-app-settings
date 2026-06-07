@@ -316,10 +316,13 @@ def create_settings_router(
                 detail=f"Geschützte Einstellung '{name}' kann nicht aktualisiert werden",
             )
         if name.lower() not in allowed_set:
+            logger.error(f"Attempt to update unknown setting '{name}' - not in allowed settings list")
+            logger.error(f"Allowed settings: {allowed_set}")
             raise HTTPException(
                 status_code=400,
                 detail=f"Unbekannte Einstellung '{name}' kann nicht aktualisiert werden",
             )
+
 
         # Update the setting value using the SettingsManager
         if setting_update is None:
