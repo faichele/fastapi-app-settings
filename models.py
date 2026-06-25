@@ -3,20 +3,25 @@ from typing import Optional, Any
 
 from pydantic import BaseModel, ConfigDict
 
-# Shared SQLAlchemy Base class
-from fastapi_shared_orm import Base
+from model_factory import configure_setting_models  # noqa: F401 – re-exported for convenience
 
-from .model_factory import create_setting_models
-
-_DEFAULT_SETTING_MODELS = create_setting_models(Base)
-Setting = _DEFAULT_SETTING_MODELS.Setting
+# SQLAlchemy-ORM-Modell wird NICHT statisch hier erzeugt.
+# Es wird dynamisch durch configure_setting_models() in dieses Modul eingebunden.
+# Nach dem Aufruf von configure_setting_models() ist folgendes Attribut verfügbar:
+#   - fastapi_app_settings.Setting
+# In Anwendungen wird empfohlen, das Setting-Modell über das database-Package zu
+# importieren (z. B. `from database import Setting`), da dort der Aufruf von
+# configure_setting_models() mit dem korrekten Präfix garantiert ist.
+Setting: type = None  # type: ignore[assignment]  – wird durch configure_setting_models() ersetzt
 
 
 class SettingBase(BaseModel):
     name: str
     value: Any
-    is_protected: bool = False
-    is_dynamic: bool = True
+    min_value: Optional[str] = None
+    max_value: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class SettingCreate(SettingBase):
@@ -28,9 +33,13 @@ class SettingUpdate(BaseModel):
     is_protected: Optional[bool] = None
     is_dynamic: Optional[bool] = None
 
+    model_config = ConfigDict(from_attributes=True)
+
 
 class SettingResponse(SettingBase):
-    id: int
+    id: Optional[int] = None
+    is_protected: bool
+    is_dynamic: bool
     created_date: datetime
     updated_date: Optional[datetime]
 

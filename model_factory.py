@@ -81,6 +81,8 @@ def create_setting_models(
         "id": Column(Integer, primary_key=True, index=True),
         "name": Column(String, unique=True, nullable=False, index=True),
         "value": Column(String, nullable=False),
+        "min_value": Column(String, nullable=True),
+        "max_value": Column(String, nullable=True),
         "created_date": Column(DateTime, default=lambda: datetime.now(timezone.utc)),
         "updated_date": Column(
             DateTime,
