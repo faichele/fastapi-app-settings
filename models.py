@@ -3,7 +3,7 @@ from typing import Optional, Any
 
 from pydantic import BaseModel, ConfigDict
 
-from model_factory import configure_setting_models  # noqa: F401 – re-exported for convenience
+from .model_factory import configure_setting_models  # noqa: F401 – re-exported for convenience
 
 # SQLAlchemy-ORM-Modell wird NICHT statisch hier erzeugt.
 # Es wird dynamisch durch configure_setting_models() in dieses Modul eingebunden.
