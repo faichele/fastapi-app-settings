@@ -390,8 +390,9 @@ def create_settings_router(
 
             try:
                 return templates.TemplateResponse(
-                    template_name,
-                    {
+                    request=request,
+                    name=template_name,
+                    context={
                         "request": request,
                         "settings": all_settings,
                         "form_action": f"{prefix}/ui/update",
@@ -476,8 +477,9 @@ def create_settings_router(
                 template_name = custom_template_name or "settings_base.html"
 
                 return templates.TemplateResponse(
-                    template_name,
-                    {
+                    request=request,
+                    name=template_name,
+                    context={
                         "request": request,
                         "settings": all_settings,
                         "form_action": f"{prefix}/ui/update",
@@ -493,8 +495,9 @@ def create_settings_router(
                 template_name = custom_template_name or "settings_base.html"
 
                 return templates.TemplateResponse(
-                    template_name,
-                    {
+                    request=request,
+                    name=template_name,
+                    context={
                         "request": request,
                         "settings": all_settings,
                         "form_action": f"{prefix}/ui/update",
