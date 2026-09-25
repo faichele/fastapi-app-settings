@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import re
 import sys
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
@@ -18,6 +19,9 @@ from sqlalchemy import Boolean, Column, DateTime, Integer, String
 # Default prefix is empty,
 # resulting in the Settings table named plainly as 'settings'
 DEFAULT_SETTING_TABLE_PREFIX = ""
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 
 @dataclass(frozen=True)
@@ -60,13 +64,16 @@ def create_setting_models(
     Args:
         base: Declarative Base bzw. abgeleitete Basisklasse der Anwendung.
         table_prefix: Optionales Präfix für die Settings-Tabelle.
-            Standardmäßig ``rideto_`` zur Wahrung der bisherigen Tabellennamen.
+            Standardmäßig ```` zur Wahrung der bisherigen Tabellennamen.
 
     Returns:
         Ein Bundle mit dem erzeugten ORM-Modell.
     """
 
     normalized_prefix = _normalize_prefix(table_prefix)
+
+    logger.info("Creating Setting model with table prefix: %s", normalized_prefix)
+
     base_cache = _cache_for_base(base)
     cached_models = base_cache.get(normalized_prefix)
     if cached_models is not None:
@@ -75,6 +82,7 @@ def create_setting_models(
     class_suffix = _class_name_suffix(normalized_prefix)
     setting_table_name = f"{normalized_prefix}settings"
 
+    logger.info("Creating Setting model with table name: %s", setting_table_name)
     setting_attrs = {
         "__module__": __name__,
         "__tablename__": setting_table_name,

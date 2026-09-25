@@ -114,11 +114,10 @@ class SettingsManager:
             # Store the bootstrap settings (if any)
             self._bootstrap_settings = bootstrap_settings
 
-            # Load .env first so ENV defaults are available during later reads
+            # Load .env for fallback/default resolution. Injected application
+            # settings remain authoritative and are not overwritten here.
             self.load_dotenv(dotenv_path=dotenv_path, override=dotenv_override)
 
-            # Optionally apply ENV values to the injected app settings (non-protected only)
-            self._sync_env_to_app_settings()
 
             self._sync_settings_to_db()
             self._load_settings_from_db()
@@ -307,6 +306,9 @@ class SettingsManager:
     def get_protected_settings(self) -> list[str]:
         return sorted(self._protected_settings)
 
+    def get_readonly_settings(self) -> list[str]:
+        return sorted(self._readonly_settings)
+
     def get_default_settings_values(self) -> Dict[str, Any]:
         """Return a copy of default values.
 
@@ -419,29 +421,8 @@ class SettingsManager:
             # Without app settings object, there is nothing to write back
             return
 
-        # Update ApplicationSettings from DB values (excluding PROTECTED_SETTINGS)
-        for row in db_rows:
-            if row.name.lower() in self._protected_settings:
-                continue
-
-            setting_name_upper = row.name.upper()
-            if hasattr(self._app_settings, setting_name_upper):
-                try:
-                    current_value = getattr(self._app_settings, setting_name_upper)
-
-                    if isinstance(current_value, bool):
-                        new_value = row.value.lower() in ("true", "1", "yes", "y")
-                    elif isinstance(current_value, int):
-                        new_value = int(row.value)
-                    elif isinstance(current_value, float):
-                        new_value = float(row.value)
-                    else:
-                        new_value = row.value
-
-                    setattr(self._app_settings, setting_name_upper, new_value)
-                    logger.debug(f"ApplicationSettings updated: {setting_name_upper}={new_value}")
-                except (ValueError, AttributeError) as e:
-                    logger.warning(f"Error while updating setting {setting_name_upper}: {str(e)}")
+        # ApplicationSettings are authoritative. Database rows remain available
+        # in the cache only for settings not defined by the application config.
 
     def _santinize_setting_attributes(self):
         """\
@@ -505,15 +486,6 @@ class SettingsManager:
             logger.info(f"Returning default value for protected setting '{name}': {default}")
             return default
 
-        # Check extra settings map for setting with given name, if database and ApplicationSettings have "fallen through"
-        logger.info(f"Extra settings map: {self._extra_settings_map}")
-        if self._extra_settings_map is not None and name.lower() in self._extra_settings_map:
-            logger.info(f"Reading setting '{name}' from extra settings map: "
-                        f"{self._extra_settings_map[name.lower()]}")
-            return self._invoke_extra_settings_resolver(name, self._extra_settings_map[name.lower()])
-        else:
-            logger.info(f"No setting with name '{name}' found in extra settings map.")
-
         attr_name = name.upper()
         if self._app_settings is not None and hasattr(self._app_settings, attr_name):
             logger.info(f"Reading setting '{name}' from ApplicationSettings as attribute")
@@ -523,6 +495,18 @@ class SettingsManager:
 
             logger.info(f"Returning setting '{name}' from ApplicationSettings as attribute: {value}")
             return value
+
+        # Dynamic application-specific settings are consulted only after the
+        # injected ApplicationSettings object has been checked.
+        if name.lower() in self._extra_settings_map:
+            logger.info(f"Reading setting '{name}' from extra settings map")
+            return self._invoke_extra_settings_resolver(name, self._extra_settings_map[name.lower()])
+
+        # Environment-file values are defaults below ApplicationSettings but
+        # above persisted runtime values.
+        if name.lower() in self._dotenv_values:
+            logger.info(f"Reading setting '{name}' from .env fallback")
+            return self._dotenv_values[name.lower()]
 
         if name in self._cached_db_settings:
             logger.info(f"Reading setting '{name}' from database cache")
@@ -572,6 +556,10 @@ class SettingsManager:
             logger.warning(f"Protected setting can not be updated: {name}")
             return False
 
+        if name.lower() in self._readonly_settings:
+            logger.warning(f"Readonly setting can not be updated: {name}")
+            return False
+
         db_setting = self.db.query(Setting).filter_by(name=name).first()
 
         if db_setting:
@@ -591,19 +579,6 @@ class SettingsManager:
             self.db.commit()
             self._cached_db_settings[name] = str(value)
 
-            if self._app_settings is not None:
-                attr_name = name.upper()
-                if hasattr(self._app_settings, attr_name):
-                    current_value = getattr(self._app_settings, attr_name)
-                    if isinstance(current_value, bool):
-                        new_value = str(value).lower() in ("true", "1", "yes", "y")
-                    elif isinstance(current_value, int):
-                        new_value = int(value)
-                    elif isinstance(current_value, float):
-                        new_value = float(value)
-                    else:
-                        new_value = str(value)
-                    setattr(self._app_settings, attr_name, new_value)
 
             return True
         except Exception as e:

@@ -3,7 +3,7 @@ import os
 import pathlib
 import logging
 import importlib.util
-from typing import Callable, Generator, Any, List
+from typing import Callable, Generator, Any, List, Sequence
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Path as FPath, Request
@@ -89,11 +89,13 @@ def create_settings_router(
     extra_settings_allowed_var: str = "ALLOWED_SETTINGS",
     extra_settings_protected_var: str = "PROTECTED_SETTINGS",
     extra_settings_defaults_var: str = "DEFAULT_SETTINGS_VALUES",
+    extra_settings_readonly_var: str = "READONLY_SETTINGS",
     extra_router_file: str | None = None,
     extra_router_attr: str = "router",
     enable_templates: bool = False,
     templates_directory: str | Path | None = None,
     custom_template_name: str | None = None,
+    dependencies: Sequence[Any] | None = None,
 ):
     """
     Creates a FastAPI APIRouter for managing application settings.
@@ -112,6 +114,7 @@ def create_settings_router(
         enable_templates: if True, enables HTML template rendering for settings UI
         templates_directory: optional, custom templates directory. If None, uses package's built-in templates
         custom_template_name: optional, custom template file name to use instead of default
+        dependencies: optional FastAPI dependencies applied to every settings endpoint
     """
     if get_db is not None:
         db_dependency = get_db
@@ -162,12 +165,13 @@ def create_settings_router(
                 app_root=base,
                 allowed_var_name=extra_settings_allowed_var,
                 protected_var_name=extra_settings_protected_var,
+                readonly_var_name=extra_settings_readonly_var,
                 default_values_var_name=extra_settings_defaults_var,
             )
         except Exception as e:
             logger.error(f"Failed to load extra settings file '{extra_settings_file}': {e}")
 
-    router = APIRouter(prefix=prefix, tags=["settings"])
+    router = APIRouter(prefix=prefix, tags=["settings"], dependencies=list(dependencies or []))
 
     # Optional: Include an extra router from a Python file, if provided
     if extra_router_file:
@@ -195,7 +199,7 @@ def create_settings_router(
 
         protected_set = set(settings_manager.get_protected_settings())
 
-        if name.lower() in protected_set:
+        if name.lower() in protected_set or name.lower() in settings_manager.get_readonly_settings():
             raise HTTPException(
                 status_code=403,
                 detail=f"Protected setting '{name}' cannot be retrieved",
@@ -314,6 +318,11 @@ def create_settings_router(
             raise HTTPException(
                 status_code=403,
                 detail=f"Geschützte Einstellung '{name}' kann nicht aktualisiert werden",
+            )
+        if name.lower() in settings_manager.get_readonly_settings():
+            raise HTTPException(
+                status_code=403,
+                detail=f"Schreibgeschützte Einstellung '{name}' kann nicht aktualisiert werden",
             )
         if name.lower() not in allowed_set:
             logger.error(f"Attempt to update unknown setting '{name}' - not in allowed settings list")
